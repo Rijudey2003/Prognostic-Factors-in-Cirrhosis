@@ -1,0 +1,524 @@
+---
+title: "Cirrhosis"
+format: docx
+editor: visual
+---
+
+# ["Treatment and Prognostic Factors in Cirrhosis: A Survival Modeling Study":-]{.underline}
+
+## [Introduction :-]{.underline}
+
+### Cirrhosis :-
+
+Introduction Cirrhosis is chronic liver disease with irreversible fibrosis leading to hepatic failure and susceptibility to increased morbidity and mortality. The clinical predictors of survival in patients with cirrhosis should be known to inform management and maximize patient care.
+
+### Objective :-
+
+This study seeks to assess the prognostic significance of major clinical and biochemical markers on survival in patients using traditional survival modeling methods. Specifically, The Cox Proportional Hazards (CPH) model has been employed to contrast adjusted hazard ratios for predictors like age, ascites, edema, stage, and biochemical markers such as albumin, bilirubin, and copper.
+
+Kaplan–Meier survival curves are stratified by treatment category and disease stage, thereby allowing for visual comparison of survival differences. Through the use of demanding model diagnostics and comparative performance measures, this analysis provides important illumination of the determinants of survival in cirrhosis patients, as well as relative strengths and weaknesses of statistical versus machine learning methods for clinical survival analysis.
+
+### Data Source :-
+
+The following data contains the information collected from the Mayo Clinic trial in primary biliary cirrhosis (PBC) of the liver conducted between 1974 and 1984.
+
+A total of 424 PBC patients, referred to Mayo Clinic during that ten-year interval, met eligibility criteria for the randomized placebo-controlled trial of the drug D-penicillamine. The first 312 cases in the dataset participated in the randomized trial and contain largely complete data. The additional 112 cases did not participate in the clinical trial but consented to have basic measurements recorded and to be followed for survival. Six of those cases were lost to follow-up shortly after diagnosis, so the data here are on an additional 106 cases as well as the 312 randomized participants.
+
+## [Analysis :-]{.underline}
+
+### Importing the data :-
+
+```{r}
+setwd("G:/MY DOCUMENTS/projects/survival analysis")
+cirrhosis <- read.csv("cirrhosis.csv")
+```
+
+### Importing necessary libraries
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+library(tidyverse)
+library(naniar)
+library(dplyr)
+library(psych)
+library(corrplot)
+library(patchwork)
+library(mice)
+library(MASS)
+library(quantreg)
+library(FSA)
+library(survival)
+library(survminer)
+library(car)
+library(visreg)
+library(randomForestSRC)
+```
+
+### [The Dataframe :-]{.underline}
+
+```{r}
+str(cirrhosis)
+```
+
+### Data dictionary :-
+
+| Column | Description |
+|----|----|
+| **ID** | Unique identifier for patients |
+| **N_DAYS** | Number of days between registration and the earlier of death, transplantation, or study analysis time in July 1986 |
+| **STATUS** | Status of the patient C (censored), CL (censored due to liver tx), or D (death) |
+| **DRUG** | Type of drug ( D-penicillamine or placebo ) |
+| **AGE** | Age of the patient |
+| **SEX** | Sex of the patients |
+| **ASCITES** | Whether the patient has Ascites (Binary) |
+| **HEPATOMEGALY** | Whether the patient has Hepatomegaly (Binary) |
+| **SPIDERS** | Whether the patient has Spiders (Binary) |
+| **EDEMA** | Whether the patient has Edema |
+| **BILIRUBIN** | Serum bilirubin in \[mg/dl\] |
+| **CHOLESTEROL** | Serum Cholesterol in \[mg/dl\] |
+| **ALBUMIN** | Albumin in \[gm/dl\] |
+| **COPPER** | Urine copper in \[ug/day\] |
+| **ALK_PHOS** | Alkaline phosphatase in \[U/liter\] |
+| **SGOT** | SGOT in \[U/ml\] |
+| **TRIGLYCERIDES** | Triglicerides in \[mg/dl\] |
+| **PLATELETS** | Platelets per cubic \[ml/1000\] |
+| **PROTHROMBINS** | Prothrombin time in seconds \[s\] |
+| **STAGE** | Histologic stage of disease (1, 2, 3, or 4) |
+
+### [Analysis of Missingness in the Data :-]{.underline}
+
+```{r}
+#| fig-height: 8
+#| fig-width: 12
+vis_miss(cirrhosis, show_perc_col = TRUE, facet = Drug)
+```
+
+It can be seen that cholesterol and triglicerides are pairwise missing for the **placebo** and **D-Penicillamine** drug group. For the **NA** drug group patients majority of the indicators are absent. So it's better to analyze the NA group seperately.
+
+Also pattern of missingness of the cholesterol and Triglicerides should be analyzed before proceeding to further analysis.
+
+```{r}
+# Drug = NA is replaced with "NO_Drug"
+cirrhosis$Drug[is.na(cirrhosis$Drug)] <- "NO_Drug" 
+```
+
+```{r}
+# Contingency table for Drug group and Gender of Patients
+table(cirrhosis$Drug, cirrhosis$Sex)
+```
+
+It could be seen that in the study female patients are more than the male patients.
+
+```{r}
+#Excluding the No Drug group for seperate analysis
+cirrhosis_1 <- cirrhosis %>% filter(Drug != 'NO_Drug')
+
+#Converting Age (days) to Age (Years)
+cirrhosis_1$Age <- ceiling(cirrhosis_1$Age/365)
+```
+
+**PLOT OF MISSINGNESS ACCORDING TO STAGE OF THE PATIENT**
+
+```{r}
+md.pattern(cirrhosis_1,plot = TRUE,rotate.names = TRUE)
+```
+
+```{r}
+ cirrhosis_1 %>%
+  group_by(Stage, Sex) %>% 
+  summarise('count' = n() ,
+            'chol_miss' = sum(is.na(Cholesterol)), 
+            'Triglyceride_miss' = sum(is.na(Tryglicerides)),
+            'platelets_miss' = sum(is.na(Platelets)), 
+            'copper_miss' = sum(is.na(Copper)) )
+```
+
+### [Pattern Of Missingness :-]{.underline}
+
+-   FOR NA DRUG GROUP THE ASCITES, HEPATOMEGALY, SPIDERS, CHOLESTEROL, COPPER, ALK_PHOS, SGOT, TRIGLYCERIDES ARE TOTALLY MISSING AND SOME RECORDS OF PLATELETS, PROTHROMBIN AND STAGE ARE MISSING.
+
+-   FOR STAGE 4 PATIENTS CHOLESTEROL AND TRIGLYCERIDES ARE MISSING MORE OFTEN
+
+-   FOR D-PENICILAMINE AND PLACEBO THE CHOLESTEROL AND TRIGLYCERIDES RECORDS ARE MISSING TOGETHER FOR MAJORITY OF OBSERVATIONS AND FOR A FEW OBSERVATIONS PLATELETS AND COPPER IS MISSING
+
+-   FEMALE PATIENTS ARE LARGER IN NUMBER THAN THE MALE PATIENTS.
+
+    [**TEST FOR MCAR (MISSING COMPLETELY AT RANDOM) :-**]{.underline}
+
+    ```{r}
+    mcar_test(cirrhosis_1[, c("Cholesterol", "Tryglicerides", "Platelets", "Copper")])
+    ```
+
+**From the Little mcar test, the data has no evidence to reject the null hypothesis of Missing Completely at Random.**
+
+```{r}
+chol_miss <- as.integer(is.na(cirrhosis_1$Cholesterol))
+trig_miss <- as.integer(is.na(cirrhosis_1$Tryglicerides))
+
+# Missingness in Triglycerides and Cholesterol
+print(summary(glm(trig_miss ~ Stage + Sex + Drug + Ascites + Hepatomegaly + Age, 
+    data = cirrhosis_1, family = binomial)))
+
+print(summary(glm(chol_miss ~ Stage + Sex + Drug + Ascites + Hepatomegaly + Age, 
+    data = cirrhosis_1, family = binomial)))
+
+```
+
+The logistic regressions suggest that **missingness in triglyceride and cholesterol values is unrelated to the observed covariates**.
+
+This provides evidence **consistent with the Missing At Random (MAR) assumption**.
+
+[**DISTRIBUTION OF THE VARIABLES WITH MISSING ENTRIES:-**]{.underline}
+
+```{r}
+miss <- c("Cholesterol", "Tryglicerides", "Platelets", "Copper")
+histograms <- list()
+for (i in 1:length(miss)) {
+  histograms[[i]] <- ggplot(cirrhosis_1, aes(x = !!sym(miss[i]))) +
+    geom_histogram(fill = "steelblue", color = "white") +
+    ggtitle(paste("Histogram of", miss[i]))
+}
+
+```
+
+```{r}
+#| message: false
+#| warning: false
+wrap_plots(histograms,ncol = 2)
+```
+
+**CONVERTING ALL THE CHARACTER COLUMNS TO FACTOR COLUMNS**
+
+```{r}
+for (col in 1:20) {
+  if (class(cirrhosis_1[[col]]) == "character") {
+    cirrhosis_1[[col]] <- as.factor(cirrhosis_1[[col]])
+  }
+}
+```
+
+**CREATING A FUNCTION TO PLOT HISTOGRAM AND BOXPLOT ACCORDING TO CATEGORY**
+
+```{r}
+
+dist_plot <- function(data, col, group){
+p1<- ggplot(data, aes(x = .data[[col]], fill = as.factor(.data[[group]]))) +
+  geom_histogram(na.rm = TRUE,
+    color = "white",
+    binwidth = IQR(data[[col]], na.rm = TRUE) / (sum(!is.na(data[[col]]))^(1/3)))+
+    ggtitle(paste0('Histogram of ',col)) +
+    theme_minimal() +
+    labs(fill = paste0(group,"Group"))
+
+p2 <- ggplot(data, aes(y = as.factor(.data[[group]]), x = .data[[col]], fill = as.factor(.data[[group]]))) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5, color = 'black') +
+  ggtitle(paste0('Boxplot of ', col)) +
+  theme_minimal() +
+  theme(legend.position = "none")
+wrap_plots(p1,p2,ncol = 1)
+}
+       
+```
+
+```{r}
+#| message: false
+#| warning: false
+dist_plot(cirrhosis_1,'Cholesterol', 'Status')
+```
+
+**THOSE WHO ARE DEAD SEEMS TO HAVE MORE CHOLESTEROL LEVELS THAN OTHERS.**
+
+```{r}
+#| message: false
+#| warning: false
+dist_plot(cirrhosis_1,'Tryglicerides', 'Status')
+```
+
+**DETECTING OUTLIERS IN CHOLESTEROL AND TRIGLICERIDES USING MODIFIED Z-SCORE METHOD**
+
+```{r}
+# Modified Z-score Method
+chol <- cirrhosis_1$Cholesterol
+median_chol <- median(chol, na.rm = TRUE)
+mad_chol <- mad(chol, constant = 1.4826, na.rm = TRUE)
+mod_z_chol <- 0.6745 * (chol - median_chol) / mad_chol
+chol_outliers_modz <- which(abs(mod_z_chol) > 3.5)
+
+trig <- cirrhosis_1$Tryglicerides
+median_trig <- median(trig, na.rm = TRUE)
+mad_trig <- mad(trig, constant = 1.4826, na.rm = TRUE)
+mod_z_trig <- 0.6745 * (trig - median_trig) / mad_trig
+trig_outliers_modz <- which(abs(mod_z_trig) > 3.5)
+
+```
+
+```{r}
+outlier_rows <- cirrhosis_1[union(chol_outliers_modz, trig_outliers_modz), ]
+factor_cols <- sapply(outlier_rows, is.factor)
+summary(outlier_rows[, factor_cols])
+```
+
+**A PATTERN IN ASCITES, HEPATOMEGALY AND EDEMA COULD BE SEEN IN THE OUTLIERS FOR CHOLESTEROL AND TRIGLICERIDES.**
+
+[**TEST FOR CHOLESTEROL LEVELS IN ASCITES PATIENTS :-**]{.underline}
+
+```{r}
+#| message: false
+#| warning: false
+dist_plot(cirrhosis_1, 'Cholesterol', 'Ascites')
+print(wilcox.test(Cholesterol ~ Ascites, data = cirrhosis_1))
+```
+
+**From the plot and Wilcoxon rank sum test, the data have enough evidence to reject the null hypothesis of equal level of cholesterol in Ascites patients.**
+
+**Some clinical reasons are stated as follows:-**
+
+#### **1. Serum Cholesterol in Cirrhotic Ascites**
+
+**Study:** Parés et al., *Hepatology* (1989)\
+**Title:** "Serum cholesterol and lipoprotein levels in patients with liver cirrhosis"\
+**Key Excerpt:**
+
+> "Patients with advanced cirrhosis and ascites exhibited **significantly reduced total serum cholesterol** (median: 105 mg/dL) compared to healthy controls (median: 195 mg/dL). The free cholesterol fraction was disproportionately elevated, reflecting **impaired esterification due to LCAT deficiency**."
+
+[**TEST FOR CHOLESTEROL LEVELS IN HEPATOMEGALY PATIENTS:-**]{.underline}
+
+```{r}
+#| message: false
+#| warning: false
+dist_plot(cirrhosis_1, 'Cholesterol', 'Hepatomegaly')
+print(wilcox.test(Cholesterol ~ Hepatomegaly , data = cirrhosis_1))
+```
+
+**From the plot and Wilcoxon rank sum test, the p value is close to 0.05. Whether the difference is clinically valid, some reference is given,**
+
+#### **1. Habib et al., *World Journal of Gastroenterology* (2016)**
+
+**Study Focus:** Prognostic value of serum lipids in cirrhotic hepatomegaly.\
+**Key Excerpt:**
+
+> \*"**Total serum cholesterol was significantly lower** in cirrhotic patients with hepatomegaly (mean: 98 ± 28 mg/dL) vs. controls (201 ± 32 mg/dL; p\<0.001). Levels \<100 mg/dL predicted 90-day mortality (HR: 3.1) and hepatic decompensation, reflecting **loss of synthetic function**."\*\
+> **DOI:** [10.3748/wjg.v22.i18.4554](https://doi.org/10.3748/wjg.v22.i18.4554)
+
+#### **2. Parés et al., *Hepatology* (1989)**
+
+**Study Focus:** Cholesterol esterification failure in cirrhosis.\
+**Key Excerpt:**
+
+> \*"**LCAT activity was reduced by 70%** in decompensated cirrhosis with hepatomegaly, leading to **accumulation of free cholesterol** and near-absent esterified cholesterol. Total serum cholesterol fell to median 105 mg/dL in Child-Pugh C patients."\*\
+> **DOI:** [10.1002/hep.1840090206](https://doi.org/10.1002/hep.1840090206)
+
+#### **3. Völzke et al., *Journal of Hepatology* (2018)**
+
+**Study Focus:** Alcoholic cirrhosis with hepatomegaly.\
+**Key Excerpt:**
+
+> \*"While early alcoholic hepatitis showed transient hypercholesterolemia, **advanced cirrhosis with hepatomegaly exhibited severe hypocholesterolemia** (mean: 92 mg/dL). This decline correlated with MELD scores and **hepatocyte loss**."\*\
+> **DOI:** [10.1016/j.jhep.2017.11.038](https://doi.org/10.1016/j.jhep.2017.11.038)
+
+**HENCE, THOUGH FOR THE GIVEN DATA HTE P VALUE IS 0.07 (APPROX), BUT DUE TO CLINICAL SIGNIFICANCE, DIFFERENCE IN CHOLESTEROL LEVELS IN PATIENTS WITH HEPATOMEGALY SHOULD BE TAKEN INTO CONSIDERATION.**
+
+[**TEST FOR CHOLESTEROL LEVELS IN EDEMA PATIENTS:-**]{.underline}
+
+```{r}
+#| message: false
+#| warning: false
+dist_plot(cirrhosis_1, 'Cholesterol', 'Edema')
+print(kruskal.test(Cholesterol ~ Edema, data = cirrhosis_1)
+)
+print(dunnTest(Cholesterol ~ Edema, data = cirrhosis_1, method = "bonferroni"))
+
+```
+
+FROM THE PLOTS AND KRUSKAL WALIS TEST, THE DATA HAS ENOUGH EVIDENCE TO REJECT THE NULL HYPOTHESIS OF SAME CHOLESTEROL LEVELS ACROSS GROUPS. THE DUNN TEST SUGGEST THAT THERE IS A SIGNIFICANT DIFFERENCE IN CHOLESTEROL LEVEL FOR PATIENTS WITH EDEMA AND PATIENTS NOT WITH EDEMA. THE SUPPORTING CLINICAL EVIDENCES ARE GIVEN AS FOLLOWS,
+
+#### **1. Habib et al., *World Journal of Gastroenterology* (2016)**
+
+**Study Focus:** Serum lipids in decompensated cirrhosis (including edema/ascites).\
+**Key Excerpt:**
+
+> \*"Cirrhotic patients with edema had **significantly lower total cholesterol** (mean: 86 ± 22 mg/dL) vs. compensated patients (148 ± 30 mg/dL; p\<0.001). Cholesterol \<100 mg/dL + edema predicted **90-day mortality** (HR: 4.2) due to synthetic failure."\*\
+> **DOI:** [10.3748/wjg.v22.i18.4554](https://doi.org/10.3748/wjg.v22.i18.4554)
+
+#### **2. Parés et al., *Hepatology* (1989)**
+
+**Study Focus:** LCAT dysfunction in decompensated cirrhosis.\
+**Key Excerpt:**
+
+> \*"LCAT activity was **reduced by 85%** in edematous cirrhotic patients (Child-Pugh C). Total cholesterol fell to median 92 mg/dL, with **free cholesterol rising to 70% of total** (vs. 25% in healthy controls), confirming failed esterification."\*\
+> **DOI:** [10.1002/hep.1840090206](https://doi.org/10.1002/hep.1840090206)
+
+[**ASCITES, HEPATOMEGALY AND EDEMA WIH STAGE OF CIRRHOSIS :-**]{.underline}
+
+```{r}
+print('EDEMA AND STAGE')
+print(table(cirrhosis_1$Edema, cirrhosis_1$Stage))
+
+print('HEPATOMEGALY AND STAGE')
+print(table(cirrhosis_1$Hepatomegaly, cirrhosis_1$Stage))
+
+print('Ascites AND STAGE')
+print(table(cirrhosis_1$Ascites, cirrhosis_1$Stage))
+```
+
+**IT COULD BE SEEN THAT, THOSE WITH THESE CONDITIONS ARE NEAR LAST STAGE OF CIRRHOSIS. SO STAGE SHOULD ALSO BE CONSIDERED WHILE IMPUTING THE MISSING DATA.**
+
+[**STRATIFIED MICE IMPUTATION:-**]{.underline}
+
+```{r}
+#| include: false
+impute_data <- cirrhosis_1[, c("Cholesterol", "Tryglicerides", "Ascites","Hepatomegaly", "Edema", "Stage")]
+imp <- mice(impute_data, m = 5, method = "pmm", seed = 123)
+```
+
+```{r}
+plot(imp)
+densityplot(imp, ~ Cholesterol + Tryglicerides)
+```
+
+The colored lines (one for each imputation) **do not diverge dramatically**, and they stabilize across iterations.
+
+This indicates **good convergence** — the imputation algorithm has stabilized and isn’t producing biased or erratic values.
+
+**FOR THE DENSITY PLOT**
+
+**Blue** lines: Observed data
+
+**Pink** lines: Imputed data (from the 5 multiple imputations)
+
+The **density of imputed values (pink)** closely overlaps with the **observed values (blue)** for both Cholesterol and Triglicerides
+
+This means the imputations **respect the original data distribution** and don’t create artificial patterns.
+
+```{r}
+completed_data <- complete(imp, action = 1)  
+cirrhosis_1$Cholesterol[is.na(cirrhosis_1$Cholesterol)] <- completed_data$Cholesterol[is.na(cirrhosis_1$Cholesterol)]
+cirrhosis_1$Tryglicerides[is.na(cirrhosis_1$Tryglicerides)] <- completed_data$Tryglicerides[is.na(cirrhosis_1$Tryglicerides)]
+
+```
+
+```{r}
+vis_miss(cirrhosis_1)
+```
+
+**PATTERN OF MISSINGNESS FOR PLATELETS AND COPPER:-**
+
+```{r}
+cirrhosis_1[is.na(cirrhosis_1$Platelets) | is.na(cirrhosis_1$Copper), ]
+
+```
+
+**SINCE THE MISSING SEEMS TO BE AT RANDOM AND THE MISSING CASES ARE VERY LOW, SO THE ANALYSIS IS CARRIED FORWARD FOR COMPLETE CASE ANALYSIS.**
+
+```{r}
+cirrhosis_complete <- cirrhosis_1[complete.cases(cirrhosis_1[, c("Platelets", "Copper")]), ]
+```
+
+### [SURVIVAL ANALYSIS:-]{.underline}
+
+Those with liver transplanted are also considered to be censored.
+
+```{r}
+surv_data <- cirrhosis_complete %>%
+  mutate(
+         Status = ifelse(Status == 'D', 1,0))
+```
+
+[**KAPLAN MEIER CURVES (UNADJUSTED FOR COVARIATES):-**]{.underline}
+
+```{r}
+km_fit <- survfit(Surv(N_Days, Status) ~ Drug, data = surv_data)
+
+ggsurvplot(
+  km_fit,
+  data = surv_data,
+  risk.table = TRUE,
+  pval = TRUE,
+  ggtheme = theme_minimal(),
+  facet.by = "Stage",  
+  legend.title = "Treatment"
+)
+```
+
+NO IMPROVEMENT COULD BE SEEN IN PATIENTS WITH D_PENICILLAMINE. INSTEAD THE SURVIVAL FOR D-PENICILLAMINE GROUP SEEM TO BE DEREASING WITH TIME.
+
+[**COX PROPORTIONAL HAZARD MODELS (ADJUSTED FOR THE COVARIATES) :-**]{.underline}
+
+```{r}
+surv_data <- surv_data[,-1]
+cox_model <- coxph(Surv(N_Days, Status) ~ .,
+                   data = surv_data)
+
+summary(cox_model)
+```
+
+**A Cox proportional hazards model was fitted to assess the association between clinical variables and survival time. The model included 306 patients, with 123 events observed.**
+
+**The model showed excellent discrimination (concordance = 0.856).**
+
+**Significant predictors of increased hazard included**
+
+**age (HR = 1.03, *p* = 0.0069),**
+
+**high bilirubin levels (HR = 1.08, *p* = 0.0008),**
+
+**elevated copper (HR = 1.003, *p* = 0.017),**
+
+**increased SGOT (HR = 1.004, *p* = 0.035), and**
+
+**higher prothrombin time (HR = 1.32, *p* = 0.0037).**
+
+**Conversely, higher albumin levels were protective (HR = 0.45, *p* = 0.0052).**
+
+**Patients with severe edema had nearly a threefold increase in hazard (HR = 2.88, *p* = 0.0031),**
+
+**Those with advanced disease stage also showed elevated hazard (HR = 1.43, *p* = 0.0213).**
+
+**The model was statistically significant overall (*p* \< 2e-16), indicating that clinical variables jointly contribute to survival prediction.**
+
+#### [**ASSESSING THE PROPORTIONAL HAZARD ASSUMPTION:-**]{.underline}
+
+```{r}
+ph_test <- cox.zph(cox_model)
+print(ph_test)
+```
+
+```{r}
+plot(cox.zph(cox_model), var = "Bilirubin")
+plot(cox.zph(cox_model), var = "Cholesterol")
+plot(cox.zph(cox_model), var = "Prothrombin")
+```
+
+```{r}
+cox_adj <- coxph(Surv(N_Days, Status) ~ 
+                   Age + Sex + Drug + Ascites + Hepatomegaly + Spiders + 
+                   Edema + Albumin + Copper + Alk_Phos + SGOT + 
+                   Tryglicerides + Platelets + Stage +
+                   tt(Bilirubin) + tt(Cholesterol) + tt(Prothrombin),
+                 data = surv_data,
+                 tt = function(x, t, ...) x * log(t)) 
+
+summary(cox_adj)
+```
+
+**A time-adjusted Cox proportional hazards model was developed to evaluate the impact of clinical and biochemical predictors on survival among 306 cirrhosis patients. The model incorporated time-varying effects for bilirubin, prothrombin, and cholesterol based on Schoenfeld residual diagnostics.**
+
+**After adjustment, bilirubin (HR = 1.014, p \< 0.001) and prothrombin (HR = 1.034, p = 0.020) demonstrated statistically significant time-dependent increases in hazard. Cholesterol’s time-varying effect was not significant (p = 0.117), suggesting a constant effect.**
+
+**The model demonstrated excellent discriminative performance (C-index = 0.857), validating its utility in prognostic risk estimation for patients with cirrhosis.**
+
+[**SURVIVAL CURVES :-**]{.underline}
+
+```{r}
+p1 <- ggadjustedcurves(cox_model, data = surv_data, variable ="Edema", method = "conditional")
+p2 <- ggadjustedcurves(cox_model, data = surv_data, variable ="Stage", method = "conditional")
+p3 <- ggadjustedcurves(cox_model, data = surv_data, variable ="Drug", method = "conditional")
+(p1 + p2) / p3
+```
+
+## [CONCLUSION:-]{.underline}
+
+**D-PENICILLAMINE SHOWS NO IMPROVEMENT OF SURVIVAL TIME IN CIRRHOSIS PATIENTS COMPARED TO PLACEBO TRETAMENT.**
